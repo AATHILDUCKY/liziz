@@ -1,0 +1,9 @@
+node_modules
+.next
+out
+build
+.env
+data/*.db
+data/*.db-*
+npm-debug.log*
+.DS_Store
