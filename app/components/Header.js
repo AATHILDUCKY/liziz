@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "@/app/context/StoreProvider";
 
 export default function Header({ categories = [] }) {
@@ -9,23 +9,41 @@ export default function Header({ categories = [] }) {
   const pathname = usePathname();
   const dialog = useRef(null);
   const [open, setOpen] = useState(false);
-  useEffect(() => {
+  const close = useCallback(() => {
+    if (dialog.current?.open) dialog.current.close();
     setOpen(false);
-  }, [pathname]);
+  }, []);
+  const openMenu = () => {
+    const menu = dialog.current;
+    if (!menu || menu.open) return;
+    // Open during the tap so native focus handling is tied to the interaction.
+    menu.showModal();
+    setOpen(true);
+  };
   useEffect(() => {
-    if (!dialog.current) return;
-    if (open) {
-      dialog.current.showModal();
-      const previous = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = previous;
-      };
+    close();
+  }, [pathname, close]);
+  useEffect(() => {
+    if (!open) return;
+    const menu = dialog.current;
+    const desktop = window.matchMedia("(min-width: 768px)");
+    if (desktop.matches) {
+      close();
+      return;
     }
-    dialog.current.close();
-  }, [open]);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onResize = (event) => {
+      if (event.matches) close();
+    };
+    desktop.addEventListener("change", onResize);
+    return () => {
+      document.body.style.overflow = previous;
+      desktop.removeEventListener("change", onResize);
+      if (menu?.open) menu.close();
+    };
+  }, [open, close]);
   if (pathname.startsWith("/admin")) return null;
-  const close = () => setOpen(false);
   return (
     <>
       <div className="border-b border-line bg-bisque/45 px-4 py-2 text-center text-[10px] tracking-[0.12em] text-mocha">
@@ -63,11 +81,12 @@ export default function Header({ categories = [] }) {
             aria-label="Open menu"
             aria-expanded={open}
             aria-controls="mobile-menu"
-            onClick={() => setOpen(true)}
-            className="flex h-11 w-11 items-center justify-center md:hidden"
+            aria-haspopup="dialog"
+            onClick={openMenu}
+            className="flex h-11 w-11 items-center justify-center rounded-sm transition-colors hover:bg-bisque/40 active:bg-bisque md:hidden"
           >
             <Icon>
-              <path d="M4 8h16M4 16h16" />
+              <path d="M4 6h16M4 12h16M4 18h16" />
             </Icon>
           </button>
           <Link
@@ -111,60 +130,83 @@ export default function Header({ categories = [] }) {
         ref={dialog}
         id="mobile-menu"
         aria-labelledby="menu-title"
-        onClose={close}
-        onClick={(e) => {
-          if (e.target === dialog.current) close();
+        onCancel={close}
+        onClose={() => {
+          // A queued close event must not reset a menu that has reopened.
+          if (!dialog.current?.open) setOpen(false);
         }}
-        className="fixed inset-0 m-0 h-dvh max-h-none w-[min(90vw,440px)] max-w-none border-r border-line bg-paper p-0 text-ink backdrop:bg-ink/40"
+        onClick={(e) => {
+          if (e.target !== e.currentTarget) return;
+          const bounds = e.currentTarget.getBoundingClientRect();
+          if (
+            e.clientX < bounds.left ||
+            e.clientX > bounds.right ||
+            e.clientY < bounds.top ||
+            e.clientY > bounds.bottom
+          ) {
+            close();
+          }
+        }}
+        className="mobile-menu fixed inset-0 m-0 max-h-none w-[min(90vw,440px)] max-w-none overflow-hidden border-r border-line bg-paper p-0 text-ink backdrop:bg-ink/40"
       >
-        <div className="flex items-center justify-between border-b border-line px-6 py-5">
-          <span id="menu-title" className="brand-wordmark text-4xl">
-            liziz
-          </span>
-          <button
-            aria-label="Close menu"
-            onClick={close}
-            className="flex h-11 w-11 items-center justify-center"
+        <div className="flex h-full flex-col">
+          <div className="mobile-menu-heading flex shrink-0 items-center justify-between border-b border-line px-6 pb-5">
+            <span id="menu-title" className="brand-wordmark text-4xl">
+              liziz
+            </span>
+            <button
+              type="button"
+              aria-label="Close menu"
+              autoFocus
+              onClick={close}
+              className="flex h-11 w-11 items-center justify-center rounded-sm transition-colors hover:bg-bisque/40 active:bg-bisque"
+            >
+              <Icon>
+                <path d="m6 6 12 12M6 18 18 6" />
+              </Icon>
+            </button>
+          </div>
+          <nav
+            aria-label="Mobile navigation"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6"
           >
-            <Icon>
-              <path d="m6 6 12 12M6 18 18 6" />
-            </Icon>
-          </button>
+            {[
+              ["/", "Home"],
+              ["/shop", "The collection"],
+              ["/shop?sort=new", "New arrivals"],
+              ["/about", "Our story"],
+              ["/cart", `Your bag (${count})`],
+            ].map(([href, label]) => (
+              <Link
+                key={href}
+                href={href}
+                onClick={close}
+                aria-current={pathname === href ? "page" : undefined}
+                className="flex min-h-14 items-center border-b border-line py-3 font-display text-2xl transition-colors hover:text-mocha active:bg-bisque/40"
+              >
+                {label}
+              </Link>
+            ))}
+            {categories.length > 0 && (
+              <p className="eyebrow mb-3 mt-8">Explore by category</p>
+            )}
+            {categories.map((c) => (
+              <Link
+                key={c.name}
+                href={`/shop?category=${encodeURIComponent(c.name)}`}
+                onClick={close}
+                className="flex min-h-11 items-center text-sm text-mocha transition-colors hover:text-ink active:bg-bisque/40"
+              >
+                {c.name}
+              </Link>
+            ))}
+            <p className="mobile-menu-note mt-8 text-xs leading-6 text-mocha">
+              Premium modest womenswear.
+              <br />
+              Designed and made by Liziz.
+            </p>
+          </nav>
         </div>
-        <nav aria-label="Mobile navigation" className="px-6 py-6">
-          {[
-            ["/", "Home"],
-            ["/shop", "The collection"],
-            ["/shop?sort=new", "New arrivals"],
-            ["/about", "Our story"],
-            ["/cart", `Your bag (${count})`],
-          ].map(([href, label]) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={close}
-              className="flex min-h-14 items-center border-b border-line py-3 font-display text-2xl"
-            >
-              {label}
-            </Link>
-          ))}
-          <p className="eyebrow mb-3 mt-8">Explore by category</p>
-          {categories.map((c) => (
-            <Link
-              key={c.name}
-              href={`/shop?category=${encodeURIComponent(c.name)}`}
-              onClick={close}
-              className="flex min-h-11 items-center text-sm text-mocha"
-            >
-              {c.name}
-            </Link>
-          ))}
-        </nav>
-        <p className="px-6 pb-8 text-xs leading-6 text-mocha">
-          Premium modest womenswear.
-          <br />
-          Designed and made by Liziz.
-        </p>
       </dialog>
     </>
   );

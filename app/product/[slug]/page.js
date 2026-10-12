@@ -85,7 +85,7 @@ export default async function ProductPage({ params }) {
       </Link>
 
       {/* Gallery + purchase panel share the selected colour (client) */}
-      <ProductView product={product} />
+      <ProductView key={product.id} product={product} />
 
       {related.length > 0 && (
         <section className="mt-16">

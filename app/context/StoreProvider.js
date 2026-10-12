@@ -34,14 +34,27 @@ export function StoreProvider({ children, initialSettings }) {
     try {
       localStorage.removeItem("vc_cart_v1");
       const raw = localStorage.getItem(CART_KEY);
-      if (raw) setCart(JSON.parse(raw));
+      if (raw) {
+        const stored = JSON.parse(raw);
+        if (Array.isArray(stored)) {
+          setCart(stored.filter((line) =>
+            line && Number.isFinite(line.qty) && line.qty > 0 &&
+            Number.isFinite(line.price) && line.price >= 0,
+          ));
+        }
+      }
     } catch {}
     setReady(true);
   }, []);
 
   // Persist cart.
   useEffect(() => {
-    if (ready) localStorage.setItem(CART_KEY, JSON.stringify(cart));
+    if (!ready) return;
+    try {
+      localStorage.setItem(CART_KEY, JSON.stringify(cart));
+    } catch {
+      // Keep shopping in memory when browser storage is unavailable or full.
+    }
   }, [cart, ready]);
 
   const showToast = useCallback((message, type = "success") => {
@@ -55,7 +68,7 @@ export function StoreProvider({ children, initialSettings }) {
       const idx = prev.findIndex((l) => l.key === key);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + (item.qty || 1) };
+        next[idx] = { ...next[idx], ...item, key, qty: next[idx].qty + (item.qty || 1) };
         return next;
       }
       return [...prev, { ...item, key, qty: item.qty || 1 }];

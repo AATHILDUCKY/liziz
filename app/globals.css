@@ -71,6 +71,16 @@ h3 {
   width: min(90%, 1400px);
   margin-inline: auto;
 }
+.mobile-menu {
+  height: 100vh;
+  height: 100dvh;
+}
+.mobile-menu-heading {
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+}
+.mobile-menu-note {
+  padding-bottom: env(safe-area-inset-bottom);
+}
 .section-space {
   padding-block: clamp(48px, 6vw, 88px);
 }
@@ -266,6 +276,10 @@ h3 {
   }
   .chip {
     @apply inline-flex min-h-11 items-center rounded-sm border px-4 py-2 text-xs font-medium transition-colors;
+  }
+  .chip[aria-pressed="true"],
+  .chip[data-selected="true"] {
+    @apply border-ink bg-ink text-paper ring-2 ring-ink ring-offset-2;
   }
 }
 /* Local Latin subsets: no third-party font request when browsing the shop. */

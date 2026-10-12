@@ -1,6 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore, formatMoney } from "@/app/context/StoreProvider";
 import {
   comboKey,
@@ -10,20 +10,24 @@ import {
 } from "@/lib/variants";
 import KokoInstallment from "@/app/components/KokoInstallment";
 
-export default function AddToCartPanel({ product, colour, setColour }) {
+export default function AddToCartPanel({
+  product,
+  colour,
+  setColour,
+}) {
   const { addToCart, showToast, settings } = useStore();
   const router = useRouter();
 
   const hasSizes = product.sizes?.length > 0;
   const hasColours = product.colours?.length > 0;
-  // Per-combination stock. A missing key means that combo is in stock.
   const variantStock = product.variantStock || {};
   const comboSoldOut = (s, c) => variantStock[comboKey(s, c)] === false;
-
-  // `colour` is lifted to the parent so the gallery can react to it.
   const [size, setSize] = useState(hasSizes ? "" : "-");
   const [qty, setQty] = useState(1);
   const [error, setError] = useState("");
+  const sizeGroup = useRef(null);
+  const colourGroup = useRef(null);
+  useEffect(() => setError(""), [size, colour]);
 
   const sizeChosen = hasSizes ? size && size !== "-" : true;
   const colourChosen = hasColours ? colour && colour !== "-" : true;
@@ -45,9 +49,6 @@ export default function AddToCartPanel({ product, colour, setColour }) {
   const selectedPricing = variantPricing(product, keySize, keyColour);
   const selectedPriceOverride = !!product.variantPrices?.[displayPricing.key];
 
-  // A size/colour chip is available given the *other* axis's current choice:
-  // if the counterpart is picked, check that exact combo; otherwise it's fine
-  // as long as at least one combo with it is in stock.
   const sizeAvail = (s) => {
     if (!hasColours) return !comboSoldOut(s, "");
     if (colourChosen) return !comboSoldOut(s, colour);
@@ -58,26 +59,16 @@ export default function AddToCartPanel({ product, colour, setColour }) {
     if (sizeChosen) return !comboSoldOut(size, c);
     return product.sizes.some((s) => !comboSoldOut(s, c));
   };
-  // Whole product sold out: master toggle off, or every combination sold out.
-  const soldOut =
-    !product.inStock ||
-    comboKeys(product.sizes || [], product.colours || []).every(
-      (k) => variantStock[k] === false,
-    );
-
-  // Is the current selection unavailable?
-  const selectedComboOut =
-    sizeChosen && colourChosen && comboSoldOut(keySize, keyColour);
-  const noColourForSize =
-    hasColours &&
-    sizeChosen &&
-    !colourChosen &&
-    product.colours.every((c) => comboSoldOut(size, c));
-  const noSizeForColour =
-    hasSizes &&
-    colourChosen &&
-    !sizeChosen &&
-    product.sizes.every((s) => comboSoldOut(s, colour));
+  const soldOut = !product.inStock || comboKeys(product.sizes || [], product.colours || []).every(
+    (key) => variantStock[key] === false,
+  );
+  const selectedComboOut = exactSelection && comboSoldOut(keySize, keyColour);
+  const noColourForSize = hasColours && sizeChosen && !colourChosen && product.colours.every(
+    (c) => comboSoldOut(size, c),
+  );
+  const noSizeForColour = hasSizes && colourChosen && !sizeChosen && product.sizes.every(
+    (s) => comboSoldOut(s, colour),
+  );
   const variantSoldOut = selectedComboOut || noColourForSize || noSizeForColour;
   const outMsg = selectedComboOut
     ? `${[keySize, keyColour].filter(Boolean).join(" / ")} is out of stock.`
@@ -90,6 +81,16 @@ export default function AddToCartPanel({ product, colour, setColour }) {
   // No add/buy when the product is sold out or the chosen combo is unavailable.
   const canBuy = !soldOut && !variantSoldOut;
 
+  function chooseSize(value) {
+    setSize(value);
+    setError("");
+  }
+
+  function chooseColour(value) {
+    setColour(value);
+    setError("");
+  }
+
   function buildLine() {
     return {
       productId: product.id,
@@ -97,27 +98,37 @@ export default function AddToCartPanel({ product, colour, setColour }) {
       name: product.name,
       price: selectedPricing.price,
       compareAtPrice: selectedPricing.compareAtPrice,
-      image: product.image,
-      size: size === "-" ? "" : size,
-      colour: colour === "-" ? "" : colour,
+      image:
+        product.images?.[product.imageColours?.indexOf(keyColour)] || product.image,
+      size: keySize,
+      colour: keyColour,
       qty,
     };
   }
 
   function validate() {
+    if (soldOut) return "This product is sold out.";
     if (hasSizes && !sizeChosen) return "Please choose a size.";
     if (hasColours && !colourChosen) return "Please choose a colour.";
     if (variantSoldOut) return outMsg;
     return "";
   }
 
-  function handleAdd(goCart = false) {
+  function handleAdd(buyNow = false) {
     const err = validate();
-    if (err) return setError(err);
+    if (err) {
+      setError(err);
+      const group = !sizeChosen ? sizeGroup : !colourChosen ? colourGroup : null;
+      group?.current?.scrollIntoView({ block: "center", behavior: "auto" });
+      group?.current?.querySelector("button:not(:disabled)")?.focus({
+        preventScroll: true,
+      });
+      return;
+    }
     setError("");
     addToCart(buildLine());
     showToast("Added to bag");
-    if (goCart) router.push("/cart");
+    if (buyNow) router.push("/checkout");
   }
 
   return (
@@ -165,27 +176,32 @@ export default function AddToCartPanel({ product, colour, setColour }) {
 
       {/* Sizes */}
       {product.sizes?.length > 0 && (
-        <div className="mt-6">
-          <p className="label">Size</p>
+        <fieldset
+          ref={sizeGroup}
+          className="mt-6 min-w-0"
+          aria-describedby={error ? "product-option-error" : undefined}
+        >
+          <legend className="label">
+            Size{sizeChosen && size ? `: ${size}` : " — choose a size"}
+          </legend>
           <div className="flex flex-wrap gap-2">
             {product.sizes.map((s) => {
               const avail = sizeAvail(s);
               return (
                 <button
                   key={s}
+                  type="button"
                   aria-pressed={size === s}
-                  onClick={() => {
-                    setSize(s);
-                    setError("");
-                  }}
-                  disabled={soldOut}
-                  aria-disabled={!avail}
+                  data-selected={size === s}
+                  onPointerDown={() => chooseSize(s)}
+                  onClick={() => chooseSize(s)}
+                  disabled={soldOut || !avail}
                   title={avail ? s : `${s} — out of stock`}
                   className={`chip min-w-[46px] justify-center ${
                     !avail
                       ? "border-line text-ash line-through decoration-2 opacity-60"
                       : size === s
-                        ? "border-ink bg-ink text-paper"
+                        ? "border-ink bg-ink text-paper ring-2 ring-ink ring-offset-2"
                         : "border-line hover:border-ink"
                   }`}
                 >
@@ -194,33 +210,38 @@ export default function AddToCartPanel({ product, colour, setColour }) {
               );
             })}
           </div>
-        </div>
+        </fieldset>
       )}
 
       {/* Colours — chip tags (same style as Size). The photo-box swatches under
           the gallery share this component's `colour` state, so both stay in sync. */}
       {product.colours?.length > 0 && (
-        <div className="mt-5">
-          <p className="label">Colour</p>
+        <fieldset
+          ref={colourGroup}
+          className="mt-5 min-w-0"
+          aria-describedby={error ? "product-option-error" : undefined}
+        >
+          <legend className="label">
+            Colour{colourChosen && colour ? `: ${colour}` : " — choose a colour"}
+          </legend>
           <div className="flex flex-wrap gap-2">
             {product.colours.map((c) => {
               const avail = colourAvail(c);
               return (
                 <button
                   key={c}
+                  type="button"
                   aria-pressed={colour === c}
-                  onClick={() => {
-                    setColour(c);
-                    setError("");
-                  }}
-                  disabled={soldOut}
-                  aria-disabled={!avail}
+                  data-selected={colour === c}
+                  onPointerDown={() => chooseColour(c)}
+                  onClick={() => chooseColour(c)}
+                  disabled={soldOut || !avail}
                   title={avail ? c : `${c} — out of stock`}
                   className={`chip ${
                     !avail
                       ? "border-line text-ash line-through decoration-2 opacity-60"
                       : colour === c
-                        ? "border-ink bg-ink text-paper"
+                        ? "border-ink bg-ink text-paper ring-2 ring-ink ring-offset-2"
                         : "border-line hover:border-ink"
                   }`}
                 >
@@ -229,7 +250,7 @@ export default function AddToCartPanel({ product, colour, setColour }) {
               );
             })}
           </div>
-        </div>
+        </fieldset>
       )}
 
       {/* Live out-of-stock notice for the chosen variant */}
@@ -245,6 +266,7 @@ export default function AddToCartPanel({ product, colour, setColour }) {
           <p className="label">Quantity</p>
           <div className="inline-flex items-center rounded-full border border-line">
             <button
+              type="button"
               onClick={() => setQty((q) => Math.max(1, q - 1))}
               className="min-h-11 min-w-11 px-4 py-2 text-lg"
               aria-label="Decrease"
@@ -253,6 +275,7 @@ export default function AddToCartPanel({ product, colour, setColour }) {
             </button>
             <span className="w-10 text-center text-sm font-medium">{qty}</span>
             <button
+              type="button"
               onClick={() => setQty((q) => q + 1)}
               className="min-h-11 min-w-11 px-4 py-2 text-lg"
               aria-label="Increase"
@@ -263,13 +286,18 @@ export default function AddToCartPanel({ product, colour, setColour }) {
         </div>
       )}
 
-      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p id="product-option-error" role="alert" className="mt-4 text-sm text-red-600">
+          {error}
+        </p>
+      )}
 
       <PaymentBadges options={settings.paymentOptions} />
 
-      {/* Actions — sticky on mobile for easy reach */}
-      <div className="sticky bottom-20 z-30 mt-7 flex gap-3 sm:static sm:bottom-auto">
+      {/* Keep the actions in flow so they cannot cover the option controls. */}
+      <div className="mt-7 flex gap-3">
         <button
+          type="button"
           onClick={() => handleAdd(false)}
           disabled={!canBuy}
           className="flex-1 rounded-full border border-ink bg-ink px-6 py-3 text-sm font-medium text-paper transition-all duration-200 hover:bg-ink/90 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40"
@@ -281,6 +309,7 @@ export default function AddToCartPanel({ product, colour, setColour }) {
               : "Add to bag"}
         </button>
         <button
+          type="button"
           onClick={() => handleAdd(true)}
           disabled={!canBuy}
           className="btn-primary flex-1"

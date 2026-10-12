@@ -2,14 +2,15 @@
 import { useEffect, useState } from "react";
 import ProductGallery from "./ProductGallery";
 import AddToCartPanel from "./AddToCartPanel";
-import { comboKey } from "@/lib/variants";
 
 // Shares the selected colour between the purchase panel and the gallery. The
 // colour is picked from the swatches under the gallery (clicking a photo picks
 // its colour too); the panel reacts to that choice for price, stock and buy.
 export default function ProductView({ product }) {
-  const hasColours = product.colours?.length > 0;
-  const [colour, setColour] = useState(hasColours ? "" : "-");
+  const colours = product.colours || [];
+  // The gallery owns only the colour. Size lives in the purchase panel, so a
+  // gallery update on small touch screens can never reset a chosen size.
+  const [colour, setColour] = useState(colours.length === 1 ? colours[0] : "");
 
   // Count every visit to this product — repeat visits and refreshes by the same
   // person all add to the total. Fired from the browser (not during server
@@ -22,8 +23,8 @@ export default function ProductView({ product }) {
   // Colours with every size combination sold out — shown crossed-out.
   const variantStock = product.variantStock || {};
   const sizePool = product.sizes?.length ? product.sizes : [""];
-  const soldOutColours = (product.colours || []).filter((c) =>
-    sizePool.every((s) => variantStock[comboKey(s, c)] === false)
+  const soldOutColours = colours.filter((c) =>
+    sizePool.every((s) => variantStock[`${s}::${c}`] === false),
   );
 
   return (
@@ -33,7 +34,7 @@ export default function ProductView({ product }) {
         imageColours={product.imageColours}
         name={product.name}
         inStock={product.inStock}
-        colours={product.colours || []}
+        colours={colours}
         soldOutColours={soldOutColours}
         activeColour={colour}
         onColour={setColour}

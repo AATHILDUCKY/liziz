@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useStore, formatMoney } from "@/app/context/StoreProvider";
+import { isVariantAvailable } from "@/lib/variants";
 
 function normalizeWhatsAppNumber(value, defaultCountryCode = "94") {
   let digits = String(value ?? "").replace(/\D/g, "");
@@ -29,6 +30,7 @@ export default function CheckoutPage() {
   const [errors, setErrors] = useState({});
   const [sending, setSending] = useState(false);
   const [handedOff, setHandedOff] = useState(false);
+  const [handoffUrl, setHandoffUrl] = useState("");
 
   useEffect(() => {
     if (ready && cart.length === 0 && !handedOff) router.replace("/cart");
@@ -37,17 +39,18 @@ export default function CheckoutPage() {
   function set(k, v) {
     setForm((f) => ({ ...f, [k]: v }));
     setErrors((e) => ({ ...e, [k]: "" }));
+    setHandoffUrl("");
   }
 
   function validate() {
     const e = {};
+    const validPhone = (value) =>
+      /^[\d+\-\s()]+$/.test(value.trim()) &&
+      /^\d{7,15}$/.test(value.replace(/\D/g, ""));
     if (!form.name.trim()) e.name = "Please enter your name.";
-    if (!/^[\d+\-\s()]{7,}$/.test(form.phone.trim()))
+    if (!validPhone(form.phone))
       e.phone = "Enter a valid phone number.";
-    if (
-      form.altPhone.trim() &&
-      !/^[\d+\-\s()]{7,}$/.test(form.altPhone.trim())
-    ) {
+    if (form.altPhone.trim() && !validPhone(form.altPhone)) {
       e.altPhone = "Enter a valid alternative phone number.";
     }
     if (!form.address.trim()) e.address = "Please enter a delivery address.";
@@ -61,64 +64,88 @@ export default function CheckoutPage() {
   function buildMessage() {
     const cur = settings.currency;
     const origin = window.location.origin;
-    const orderRef = `LZ-${Date.now().toString().slice(-6)}`;
+    const orderRef = `LZ-${Date.now()}`;
     const lines = cart.map((l, i) => {
-      const opts = [
-        l.size && `Size: ${l.size}`,
-        l.colour && `Colour: ${l.colour}`,
-      ]
-        .filter(Boolean)
-        .join(", ");
+      const discount = l.compareAtPrice > l.price
+        ? `Original unit price: ${formatMoney(l.compareAtPrice, cur)}\n` +
+          `Item savings: ${formatMoney((l.compareAtPrice - l.price) * l.qty, cur)}\n`
+        : "";
       const productLink = l.slug
         ? `${origin}/product/${encodeURIComponent(l.slug)}`
         : `${origin}/cart`;
       return (
-        `${i + 1}. ${l.name}\n` +
-        `   Link: ${productLink}\n` +
-        `   Qty: ${l.qty}${opts ? `  |  ${opts}` : ""}\n` +
-        `   Unit: ${formatMoney(l.price, cur)}  |  Line: ${formatMoney(l.price * l.qty, cur)}`
+        `*${i + 1}. ${l.name}*\n` +
+        `Size: ${l.size || "Not applicable"}\n` +
+        `Colour: ${l.colour || "Not applicable"}\n` +
+        `Quantity: ${l.qty}\n` +
+        `Unit price: ${formatMoney(l.price, cur)}\n` +
+        discount +
+        `Item total: ${formatMoney(l.price * l.qty, cur)}\n` +
+        `Product link: ${productLink}`
       );
     });
+    const quantity = cart.reduce((total, line) => total + line.qty, 0);
 
     return (
       `*${settings.storeName || "LIZIZ"} — NEW ORDER*\n` +
-      `Ref: ${orderRef}\n` +
-      `--------------------------------\n` +
-      `${lines.join("\n\n")}\n` +
-      `--------------------------------\n` +
-      `*TOTAL: ${formatMoney(subtotal, cur)}*\n\n` +
-      `*Customer details*\n` +
-      `Name: ${form.name}\n` +
-      `Phone: ${form.phone}\n` +
-      (form.altPhone ? `Alternative phone: ${form.altPhone}\n` : "") +
-      `Address: ${form.address}\n` +
-      (form.note ? `Note: ${form.note}\n` : "") +
-      `\nSent from the ${settings.storeName || "Liziz"} website.`
+      `Order reference: ${orderRef}\n\n` +
+      `*Customer & delivery details*\n` +
+      `Full name: ${form.name.trim()}\n` +
+      `Phone number: ${form.phone.trim()}\n` +
+      `Alternative phone: ${form.altPhone.trim() || "Not provided"}\n` +
+      `Delivery address:\n${form.address.trim()}\n` +
+      `Order notes: ${form.note.trim() || "None"}\n\n` +
+      `*Order items*\n${lines.join("\n\n")}\n\n` +
+      `Total quantity: ${quantity}\n` +
+      `*ITEMS TOTAL: ${formatMoney(subtotal, cur)}*\n\n` +
+      `Website: ${origin}`
     );
   }
 
   async function placeOrder(e) {
     e?.preventDefault();
+    if (sending) return;
     if (!validate()) return;
     const number = normalizeWhatsAppNumber(settings.whatsappNumber);
     if (!number) {
       showToast("Store WhatsApp number not set. Please contact us.", "error");
       return;
     }
+    // Reserve the tab during the submit gesture, before asynchronous requests
+    // consume the browser's popup permission.
+    let whatsappWindow = null;
+    try {
+      whatsappWindow = window.open("about:blank", "_blank");
+      if (whatsappWindow) whatsappWindow.opener = null;
+    } catch {}
+    setHandoffUrl("");
     setSending(true);
 
     // Re-check stock right before ordering so we never send a sold-out item.
     try {
-      const res = await fetch("/api/products");
-      const data = await res.json();
-      const live = new Map((data.products || []).map((p) => [p.id, p]));
+      const ids = [...new Set(cart.map((line) => line.productId))];
+      const entries = await Promise.all(
+        ids.map(async (id) => {
+          const res = await fetch(
+            `/api/products/${encodeURIComponent(id)}?availability=1`,
+            { cache: "no-store" },
+          );
+          if (res.status === 404) return [id, null];
+          if (!res.ok) throw new Error("Could not check availability.");
+          const data = await res.json();
+          return [id, data.product];
+        }),
+      );
+      const live = new Map(entries);
       const dead = cart.filter((l) => {
         const p = live.get(l.productId);
-        return !p || !p.inStock;
+        return !p || !isVariantAvailable(p, l.size || "", l.colour || "");
       });
       if (dead.length) {
+        whatsappWindow?.close();
+        const options = [dead[0].size, dead[0].colour].filter(Boolean).join(" / ");
         showToast(
-          `${dead[0].name} just sold out. Please review your bag.`,
+          `${dead[0].name}${options ? ` (${options})` : ""} is unavailable. Please review your bag.`,
           "error",
         );
         setSending(false);
@@ -132,8 +159,9 @@ export default function CheckoutPage() {
     // Record the lead for analytics (best sellers + lead counting). Fire-and-forget:
     // never block the WhatsApp hand-off if this fails.
     try {
-      await fetch("/api/leads", {
+      fetch("/api/leads", {
         method: "POST",
+        keepalive: true,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           items: cart.map((l) => ({
@@ -148,12 +176,24 @@ export default function CheckoutPage() {
           customerName: form.name,
           customerPhone: form.phone,
         }),
-      });
+      }).catch(() => {});
     } catch {}
 
     const url = `https://wa.me/${number}?text=${encodeURIComponent(buildMessage())}`;
-    // Open WhatsApp (mobile app or WhatsApp Web).
-    window.open(url, "_blank");
+    // If a popup is blocked or closed, retain the bag and offer a direct link.
+    if (!whatsappWindow || whatsappWindow.closed) {
+      setHandoffUrl(url);
+      setSending(false);
+      return;
+    }
+    try {
+      whatsappWindow.location.replace(url);
+    } catch {
+      whatsappWindow.close();
+      setHandoffUrl(url);
+      setSending(false);
+      return;
+    }
     // Clearing the bag must not trigger the empty-cart redirect while the
     // confirmation route is loading.
     setHandedOff(true);
@@ -408,6 +448,16 @@ export default function CheckoutPage() {
               <WhatsAppIcon />
               {sending ? "Preparing…" : "Continue on WhatsApp"}
             </button>
+            {handoffUrl && (
+              <div className="mt-4" role="status">
+                <p className="text-sm text-ash">
+                  WhatsApp did not open. Your bag is saved; use this link to continue.
+                </p>
+                <a href={handoffUrl} className="btn-outline mt-3 w-full">
+                  Open WhatsApp with your order
+                </a>
+              </div>
+            )}
 
             <p className="mt-3 text-center text-xs leading-relaxed text-ash">
               Your order details will open in WhatsApp before sending.

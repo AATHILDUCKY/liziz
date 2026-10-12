@@ -2,7 +2,7 @@ import { z } from "zod";
 import db from "@/lib/db";
 import { route, ok, fail } from "@/lib/api";
 import { requireStockAccess } from "@/lib/auth";
-import { getProduct } from "@/lib/models";
+import { getProduct, getProductAvailability } from "@/lib/models";
 import { pruneVariantStock, normalizeVariantPrices, normalizeGallery } from "@/lib/variants";
 
 export const runtime = "nodejs";
@@ -40,8 +40,11 @@ const updateSchema = z.object({
   newDrop: z.boolean().optional(),
 });
 
-export const GET = route(async (_req, { params }) => {
-  const product = getProduct(await getRouteId(params));
+export const GET = route(async (req, { params }) => {
+  const id = await getRouteId(params);
+  const product = new URL(req.url).searchParams.get("availability") === "1"
+    ? getProductAvailability(id)
+    : getProduct(id);
   if (!product) return fail(404, "Product not found.");
   return ok({ product });
 });

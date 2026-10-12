@@ -121,10 +121,12 @@ export default function ProductGallery({
                 <button
                   key={c}
                   type="button"
+                  onPointerDown={() => onColour && onColour(c)}
                   onClick={() => onColour && onColour(c)}
+                  disabled={!inStock || soldOut}
                   aria-pressed={selected}
                   title={soldOut ? `${c} — sold out` : c}
-                  className="group flex w-[72px] flex-col items-center gap-1.5 sm:w-20"
+                  className="group flex w-[72px] flex-col items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-60 sm:w-20"
                 >
                   <span
                     className={`relative block aspect-square w-full overflow-hidden rounded-xl border transition ${
